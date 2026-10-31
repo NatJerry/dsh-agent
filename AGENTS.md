@@ -2,6 +2,25 @@
 
 适用于任何工作区、任何语言、任何对话。
 
+## 全局规则维护：发现可复用问题就回写本文件
+
+本文件不只记录既有约定，也要持续吸收新坑。**发现下列任一情况，本轮内就更新本文件**，不要等用户再提，也不要只在对话里说一遍：
+
+1. **工具/流程误解被用户纠正**：Agent 的工具调用方式、参数语义、路径或权限假设出错，用户指出并确认用户说法正确（例如沙箱边界、命令形态、路径解析）。记「错法 → 正确做法 → 为什么」。
+2. **依赖/环境报错已解决**：项目常用依赖（pnpm/Node、Python、Gradle、插件、系统命令等）的报错解决后，汇总「报错关键行 → 根因 → 触发条件 → 解决步骤」，让下次能直接照做。
+3. **跨项目共性坑**：任何不限于当前项目、其他项目大概率也会撞上的问题（编码/换行、长路径、权限与 ACL、代理与网络、版本锁定、工具 shim 失效等）。
+4. **用户确认过的口径**：用户明确认可、且判断会反复用到的做法、命名或流程偏好。
+
+写法要求：
+
+- 写入前先搜本文件有无同主题；有则改那一条，不要堆重复条目。
+- 一条一个主题，标题写问题本身；正文 2–6 行：现象 → 根因 → 做法。
+- 只留可复用结论；项目专属细节（具体文件名、一次性参数）不要写进来。
+- 不写密钥、token、私有 URL、个人隐私。
+- 没把握是否普适时先问用户，不要猜测性写入。
+
+不必写：一次性的调试过程、已有技能或项目文档已覆盖的内容、纯个人偏好（用户明确要求除外）。
+
 ## 单次调用的方法必须内联
 
 - 方法/函数/helper 若只有一个调用点，就把方法体直接放到调用处，不要保留这层包装。
@@ -40,3 +59,22 @@
 ### 读题
 
 - 有多模态能力时优先直接读图，不必要不要上 OCR；OCR 只作兜底，且不要用 OCR 文本去推断点击坐标。
+
+## Windows：工作区 = 用户主目录时 pwsh 全部被拒
+
+- 现象：任意 `pwsh` 调用都返回 `Windows ACL temp root must be outside the workspace: workspace=C:\Users\Jerry; temp=...\Temp`，与具体命令无关。
+- 根因：工作区被设为整个用户主目录，沙箱要求的临时根落进工作区内，属配置冲突，不是权限不足或命令写错。
+- 做法：确需 shell 时，对**同一条命令**单次带 `sandbox_permissions: danger-full-access` 重试（会走审批）；或改用文件工具（read/write/edit/glob/grep）完成。不要反复改命令形态试错。
+
+## npm 禁用 git 依赖（EALLOWGIT）
+
+- 现象：`npx github:owner/repo` 之类安装失败，报 `npm error code EALLOWGIT` / `Fetching packages of type "git" have been disabled`。
+- 根因：npm 侧 `allow-git=none`（本机为 `none`），所有 git 协议依赖被策略禁用。
+- 做法：`git clone --depth 1 <repo>` → `npm pack <cloned-dir> --pack-destination <dir>` → 用产出的 `.tgz` 安装（profile 依赖写 `file:`，或装器用 `--source <tgz>`）。不要擅自改用户的 npm 策略。
+
+## pnpm / npx shim 指向失效路径
+
+- 现象：`pnpm.cmd` 或 `npx pnpm` 报 `'"...\node_modules\pnpm\pnpm"' is not recognized`，但 `pnpm --version` 之前还能用。
+- 根因：shim 记的是 store 里已不存在的链接路径，常见于 pnpm 升级、缓存清理或换版本之后。
+- 做法：改用 `corepack pnpm ...`（按 `packageManager` 取版本，必要时联网下载）。项目声明了 `packageManager` 时，corepack 是首选。
+- 补充：安装器若报 `pnpm was not found on PATH`，先定位 DSH 自带的 pnpm（`%APPDATA%\DSH Desktop\runtime-commands\generations\*\bin\pnpm.cmd`），但该 shim 常常也是坏的，仍优先 corepack。
