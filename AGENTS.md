@@ -30,7 +30,6 @@
 - 内联只做结构调整：行为、日志文案、错误处理、回退逻辑保持原样。
 - 重构时主动检查“只被调用一次的方法”，一并内联，不要等用户再提。
 
-
 ## Computer Use（桌面/浏览器操作）规则
 
 适用于 cua-driver 一类 GUI 自动化。核心原则：**点击已发出 ≠ 点击已生效**，每次动作都要看结果核验。
@@ -78,3 +77,25 @@
 - 根因：shim 记的是 store 里已不存在的链接路径，常见于 pnpm 升级、缓存清理或换版本之后。
 - 做法：改用 `corepack pnpm ...`（按 `packageManager` 取版本，必要时联网下载）。项目声明了 `packageManager` 时，corepack 是首选。
 - 补充：安装器若报 `pnpm was not found on PATH`，先定位 DSH 自带的 pnpm（`%APPDATA%\DSH Desktop\runtime-commands\generations\*\bin\pnpm.cmd`），但该 shim 常常也是坏的，仍优先 corepack。
+
+## Gradle 在受限文件沙箱下报 native-platform.dll 加载失败
+
+- 现象：`gradle` 启动即失败，报 `Could not initialize native services. > Failed to load native library 'native-platform.dll' for Windows ...`，与构建脚本无关；`-Dorg.gradle.native=false` 无效。
+- 根因：Gradle 要往 `GRADLE_USER_HOME`（默认 `~/.gradle`，在工作区外）解压 native 库并建缓存锁；文件沙箱只放行工作区时被拒，但报错文案指向 native 库，容易误判为环境损坏。
+- 做法：对**同一条** gradle 命令单次带 `sandbox_permissions: danger-full-access` 重试；或把 `GRADLE_USER_HOME` 指到工作区内可写目录（首次会重新解析依赖，离线环境不可行）。
+- 同一命令在工作区策略为 `danger-full-access` 时能正常构建，可据此确认是该原因而非 Gradle 损坏。
+## night-config 解析空 YAML 抛 NPE
+
+- 现象：加载配置时报 `ParsingException: YAML parsing failed`，cause 为 `NullPointerException: Cannot invoke "java.util.Map.entrySet()" because "map" is null`，定位在 `YamlParser.parse`。
+- 根因：`snakeyaml.load()` 对空文档（0 字节或只有注释）返回 `null`，night-config 未判空就调 `map.entrySet()`。
+- 做法：解析前判断文件是否含实际键值（存在非空行且不以 `#` 开头），没有就跳过 `load()`，用默认值，随后 `save()` 会写成合法 YAML。首次 `createNewFile()` 出来的空配置文件必中这一条。
+## Ktor：ContentNegotiation 会污染 WebSocket 握手
+
+- 现象：同一个 `HttpClient` 上既装 `ContentNegotiation` 又用 `WebSockets`，建连抛 `Serializer for class 'DefaultClientWebSocketSession' is not found`；看着像漏加 `@Serializable`，但那个类是 Ktor 内部的，补不了。
+- 根因：`ContentNegotiation` 的请求拦截以 `Content-Type` 为触发条件；若 `defaultRequest` 里全局设了 `Content-Type: application/json`，WS 升级请求也会被当成待序列化 body 送进 kotlinx.serialization。
+- 做法：全程只 `setBody(字符串)` 的客户端不要装 `ContentNegotiation`；HTTP 与 WS 混用且 HTTP 需要类型化序列化时，拆成两个 client，WS 那个只装 `WebSockets`；`defaultRequest` 只放鉴权头，`Content-Type` 按请求设。
+- 附带：`setBody(非 @Serializable 数据类)` 在装了 `ContentNegotiation` 的客户端上必抛同款异常，先 `toJson` 成字符串再发。
+## Windows：DSH 沙箱下 MSBuild 建 Temp 目录失败，cmake-rs crate 编译挂
+- 现象：`cargo check/build` 编译依赖 cmake-rs 的 crate（flate2 zlib-ng、libz-sys 等）时 build script panic：`command did not execute successfully, got: exit code: 1` 或 `0xe0434352`；MSBuild 只打一行版本横幅、0 error，或报 `MSB1025 ... 对路径 %TEMP%\MSBuildTemp... 的访问被拒绝`。
+- 根因：MSBuild 启动要在 `%TEMP%` 建 `MSBuildTemp<guid>`，DSH 文件沙箱下该创建被拒且错误常不显示，看起来像编译器/VS 损坏。
+- 做法：同一条命令带 `danger-full-access`，并把 `$env:TEMP`、`$env:TMP`、`$env:TMPDIR` 指到工作区内先建好的目录再跑 cargo（只放行不改 TEMP 仍可能间歇失败）。不要去改 CMake/VS 配置。
